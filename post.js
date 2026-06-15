@@ -281,15 +281,16 @@ async function postToThreads(page, text) {
     viewport: { width: 1280, height: 800 },
   });
 
-  // sessionid クッキーを注入
+  // sessionid クッキーを注入（%3A 等のURLエンコードを解除してからセット）
   await context.addCookies([
     {
       name: 'sessionid',
-      value: THREADS_SESSION_ID,
+      value: decodeURIComponent(THREADS_SESSION_ID),
       domain: '.threads.com',
       path: '/',
       httpOnly: true,
       secure: true,
+      sameSite: 'None',
     },
   ]);
 
