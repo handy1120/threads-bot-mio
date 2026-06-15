@@ -1,0 +1,48 @@
+name: Daily Threads Post (mio)
+
+on:
+  schedule:
+    # 毎日 21:00 UTC (= JST 6:00 の翌日) に実行
+    - cron: '0 21 * * *'
+  workflow_dispatch: # 手動実行も可能
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run post script
+        env:
+          THREADS_SESSION_ID: ${{ secrets.THREADS_SESSION_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_PASS: ${{ secrets.NOTIFY_EMAIL_PASS }}
+        run: node post.js
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            log.txt
+            last_check.json
+          retention-days: 30

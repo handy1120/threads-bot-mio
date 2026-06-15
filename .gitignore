@@ -1,0 +1,6 @@
+.env
+node_modules/
+*.png
+last_check.json
+user_data/
+bu_user_data/
