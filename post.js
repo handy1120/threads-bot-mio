@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 // ── 設定 ─────────────────────────────────────────────
-const THREADS_SESSION_ID = process.env.THREADS_SESSION_ID;
+const THREADS_SESSION_ID = (process.env.THREADS_SESSION_ID || '').trim();
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY;
 const NOTIFY_EMAIL_FROM  = process.env.NOTIFY_EMAIL_FROM;
 const NOTIFY_EMAIL_TO    = process.env.NOTIFY_EMAIL_TO;
@@ -282,13 +282,22 @@ async function postToThreads(page, text) {
   });
 
   // sessionid クッキーを注入（url指定でdomain/path/secureを自動解決）
-  await context.addCookies([
-    {
-      name: 'sessionid',
-      value: decodeURIComponent(THREADS_SESSION_ID),
-      url: 'https://www.threads.com',
-    },
-  ]);
+  const sessionIdValue = decodeURIComponent(THREADS_SESSION_ID);
+  console.log(`🍪 SESSION_ID 文字数: 元=${THREADS_SESSION_ID.length} デコード後=${sessionIdValue.length}`);
+  try {
+    await context.addCookies([
+      {
+        name: 'sessionid',
+        value: sessionIdValue,
+        url: 'https://www.threads.com',
+      },
+    ]);
+  } catch (err) {
+    console.error('❌ addCookies失敗:', err.message);
+    console.error('   先頭5文字コード:', [...sessionIdValue.slice(0, 5)].map(c => c.charCodeAt(0)));
+    console.error('   末尾5文字コード:', [...sessionIdValue.slice(-5)].map(c => c.charCodeAt(0)));
+    throw err;
+  }
 
   const page = await context.newPage();
 
