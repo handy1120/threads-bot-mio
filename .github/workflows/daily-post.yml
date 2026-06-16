@@ -45,4 +45,5 @@ jobs:
           path: |
             log.txt
             last_check.json
+            debug_*.png
           retention-days: 30
