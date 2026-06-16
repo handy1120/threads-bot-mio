@@ -201,23 +201,27 @@ async function postToThreads(page, text) {
   }
   console.log(`  ✅ 入力確認 (${inputContent.length}文字): ${inputContent.substring(0, 30)}...`);
 
-  // ── 送信：「投稿」と完全一致するボタンのうち DOM 末尾のもの ─
-  // :has-text() は部分一致のため「投稿オプション/Post Options」も誤って
-  // マッチしてしまう。:text-is() で完全一致に変更して誤クリックを防ぐ。
-  const POST_BUTTON_SELECTOR = [
-    'div[role="button"]:text-is("投稿")',
-    'button:text-is("投稿")',
-    'div[role="button"]:text-is("Post")',
-    'button:text-is("Post")',
-  ].join(', ');
-  const postButton = page.locator(POST_BUTTON_SELECTOR).last();
+  // ── 送信：「投稿」に完全一致する要素の座標を取得してマウスクリック ──
+  // Playwright ロケータ（locator().waitFor）は背後のフィードが動的に再描画
+  // されるせいで安定せずタイムアウトすることがあるため、コンポーズボタンと
+  // 同様に DOM 座標を取得して直接クリックする方式に統一する。
+  // 「投稿」「Post」は完全一致のみ対象とし、「投稿オプション/Post Options」
+  // のような部分一致を避ける。モーダルはDOM末尾に追加されるため、
+  // 一致する要素のうち最後のものを採用する。
+  const postRect = await page.evaluate(() => {
+    const candidates = Array.from(document.querySelectorAll('div[role="button"], button'));
+    const matches = candidates.filter(el => {
+      const t = el.innerText?.trim();
+      return t === '投稿' || t === 'Post';
+    });
+    const target = matches[matches.length - 1];
+    if (!target) return null;
+    const r = target.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
 
-  try {
-    await postButton.waitFor({ state: 'visible', timeout: 8000 });
-    await postButton.scrollIntoViewIfNeeded();
-    await postButton.click();
-    console.log('  ✅ モーダル内の送信ボタンをクリック');
-  } catch (err) {
+  if (!postRect) {
     // デバッグ：ボタン候補を全ダンプ
     const btnDump = await page.$$eval('div[role="button"], button', els =>
       els.map(el => ({ text: el.innerText?.trim().substring(0, 40), label: el.getAttribute('aria-label') }))
@@ -225,8 +229,12 @@ async function postToThreads(page, text) {
     );
     console.error('  🔍 ボタン候補:', JSON.stringify(btnDump, null, 2));
     await page.screenshot({ path: 'debug_no_submit.png' });
-    throw new Error(`送信ボタンが見つかりませんでした: ${err.message}`);
+    throw new Error('送信ボタンが見つかりませんでした');
   }
+
+  console.log(`  🖱️ 送信ボタンクリック試行: (${postRect.x}, ${postRect.y})`);
+  await page.mouse.click(postRect.x, postRect.y);
+  console.log('  ✅ モーダル内の送信ボタンをクリック');
 
   // 投稿ボタンを押した後、3秒待ってからスクリーンショット
   await page.waitForTimeout(3000);
@@ -343,6 +351,7 @@ async function postToThreads(page, text) {
     console.error('❌ エラー:', err.message);
     await page.screenshot({ path: 'debug_error.png' });
     console.error('📸 debug_error.png に保存しました');
+    process.exitCode = 1;
   } finally {
     await browser.close();
   }
