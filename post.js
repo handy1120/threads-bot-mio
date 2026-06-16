@@ -201,14 +201,14 @@ async function postToThreads(page, text) {
   }
   console.log(`  ✅ 入力確認 (${inputContent.length}文字): ${inputContent.substring(0, 30)}...`);
 
-  // ── 送信：「投稿」テキストを持つボタンのうち DOM 末尾のもの ─
-  // Threads はモーダルに role="dialog" を付けないため、page 全体から
-  // :not() で作成系ボタンを除外し .last() でモーダル内ボタンを取得する。
+  // ── 送信：「投稿」と完全一致するボタンのうち DOM 末尾のもの ─
+  // :has-text() は部分一致のため「投稿オプション/Post Options」も誤って
+  // マッチしてしまう。:text-is() で完全一致に変更して誤クリックを防ぐ。
   const POST_BUTTON_SELECTOR = [
-    'div[role="button"]:has-text("投稿"):not([aria-label="作成"]):not([aria-label="新しいスレッド"]):not([aria-label="新しいスレッドを作成"])',
-    'button:has-text("投稿"):not([aria-label="作成"]):not([aria-label="新しいスレッド"]):not([aria-label="新しいスレッドを作成"])',
-    'div[role="button"]:has-text("Post"):not([aria-label="Create"]):not([aria-label="New thread"])',
-    'button:has-text("Post"):not([aria-label="Create"]):not([aria-label="New thread"])',
+    'div[role="button"]:text-is("投稿")',
+    'button:text-is("投稿")',
+    'div[role="button"]:text-is("Post")',
+    'button:text-is("Post")',
   ].join(', ');
   const postButton = page.locator(POST_BUTTON_SELECTOR).last();
 
