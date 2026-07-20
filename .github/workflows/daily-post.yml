@@ -28,6 +28,17 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # 実行間で last_check.json を引き継ぎ、同じ記事の再投稿を防ぐ。
+      # key に run_id を含めるため毎回ミスヒット→post-job で必ず新しいcacheを保存し、
+      # restore-keys で直近のcacheを復元する（standard "always update" パターン）。
+      - name: Restore last_check state
+        uses: actions/cache@v4
+        with:
+          path: last_check.json
+          key: last-check-${{ github.run_id }}
+          restore-keys: |
+            last-check-
+
       - name: Run post script
         env:
           THREADS_SESSION_ID: ${{ secrets.THREADS_SESSION_ID }}
