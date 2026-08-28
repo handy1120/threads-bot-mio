@@ -13,7 +13,11 @@ const NOTIFY_EMAIL_FROM  = process.env.NOTIFY_EMAIL_FROM;
 const NOTIFY_EMAIL_TO    = process.env.NOTIFY_EMAIL_TO;
 const NOTIFY_EMAIL_PASS  = process.env.NOTIFY_EMAIL_PASS;
 const RSS_URL            = 'https://note.com/mio_nekokaji/rss';
-const LAST_CHECK_FILE    = path.join(__dirname, 'last_check.json');
+// 投稿済み記事の状態ファイル。git 管理下に置き、CI からコミットして永続化する。
+// （以前は last_check.json を Actions cache に載せていたが、キャッシュが復元
+//   できない日があると「新着ゼロ」を判定できず同じ記事を毎日投稿していた）
+const STATE_FILE         = path.join(__dirname, 'posted.json');
+const MAX_HISTORY        = 100;
 
 // ── バリデーション ────────────────────────────────────
 if (!THREADS_SESSION_ID) {
@@ -50,38 +54,60 @@ async function sendNotification(subject, body) {
   }
 }
 
-// ── last_check.json の読み書き ────────────────────────
-function loadLastCheck() {
+// ── 投稿済み状態（posted.json）の読み書き ──────────────
+// URL のゆらぎ（クエリ・末尾スラッシュ）を吸収して同一記事を判定する
+function normalizeUrl(url) {
+  return (url || '').trim().split(/[?#]/)[0].replace(/\/+$/, '');
+}
+
+function loadState() {
   try {
-    const data = JSON.parse(fs.readFileSync(LAST_CHECK_FILE, 'utf8'));
-    return new Date(data.lastCheck);
-  } catch {
-    // ファイルがなければ十分古い日付を返す
-    return new Date(0);
+    const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (!Array.isArray(data.posted)) throw new Error('posted が配列ではありません');
+    return data;
+  } catch (e) {
+    return null; // 未作成 or 壊れている
   }
 }
 
-function saveLastCheck(date) {
-  fs.writeFileSync(LAST_CHECK_FILE, JSON.stringify({ lastCheck: date.toISOString() }), 'utf8');
+function saveState(state) {
+  state.posted = state.posted.slice(0, MAX_HISTORY);
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + '\n', 'utf8');
 }
 
-// ── RSSから新着記事を取得 ─────────────────────────────
-async function fetchNewArticles(since) {
+// ── RSSから未投稿の記事を取得 ─────────────────────────
+async function fetchNewArticles(state) {
   console.log('📡 RSSを取得中:', RSS_URL);
   const feed = await rssParser.parseURL(RSS_URL);
+  const postedUrls = new Set(state.posted.map(p => normalizeUrl(p.url)));
+
   const newItems = feed.items
-    .filter(item => {
-      const pubDate = new Date(item.pubDate || item.isoDate || 0);
-      return pubDate > since;
-    })
+    .filter(item => !postedUrls.has(normalizeUrl(item.link || item.url)))
     .sort((a, b) => {
       const dateA = new Date(a.pubDate || a.isoDate || 0);
       const dateB = new Date(b.pubDate || b.isoDate || 0);
       return dateB - dateA; // 新しい順にソート
     })
     .slice(0, 1); // 最新1件のみ処理
-  console.log(`📰 新着記事: ${newItems.length} 件を処理 (前回チェック: ${since.toISOString()})`);
+  console.log(`📰 未投稿記事: ${newItems.length} 件を処理 (投稿済み: ${postedUrls.size} 件)`);
   return newItems;
+}
+
+// ── 状態ファイルが無い場合は「全部新着」とせず、種まきして終了する ──
+// 履歴を失った状態で走ると過去記事を再投稿してしまうため、安全側に倒す。
+async function seedState() {
+  console.log('⚠️  posted.json がありません。RSS の現行記事を投稿済みとして記録します。');
+  const feed = await rssParser.parseURL(RSS_URL);
+  const state = {
+    lastCheck: new Date().toISOString(),
+    posted: feed.items.map(i => ({
+      url: normalizeUrl(i.link || i.url),
+      title: i.title || '',
+      postedAt: 'seed',
+    })),
+  };
+  saveState(state);
+  console.log(`✅ ${state.posted.length} 件を seed しました。今回は投稿しません。`);
 }
 
 // ── Anthropic APIでThreads投稿文を生成 ───────────────
@@ -244,13 +270,22 @@ async function postToThreads(page, text) {
 
 // ── メイン処理 ────────────────────────────────────────
 (async () => {
-  // 1. 前回チェック時刻を取得
-  const lastCheck = loadLastCheck();
+  // 1. 投稿済み状態を読み込む（無ければ seed して終了）
+  const state = loadState();
+  if (!state) {
+    try {
+      await seedState();
+    } catch (err) {
+      console.error('❌ RSS取得エラー:', err.message);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
 
-  // 2. 新着記事を取得
+  // 2. 未投稿の記事を取得
   let newArticles;
   try {
-    newArticles = await fetchNewArticles(lastCheck);
+    newArticles = await fetchNewArticles(state);
   } catch (err) {
     console.error('❌ RSS取得エラー:', err.message);
     process.exit(1);
@@ -258,6 +293,8 @@ async function postToThreads(page, text) {
 
   if (newArticles.length === 0) {
     console.log('ℹ️  新着記事はありません。終了します。');
+    state.lastCheck = new Date().toISOString();
+    saveState(state);
     process.exit(0);
   }
 
@@ -328,12 +365,18 @@ async function postToThreads(page, text) {
 
     // 各記事を投稿
     for (let i = 0; i < posts.length; i++) {
-      const { title, postText } = posts[i];
+      const { title, url, postText } = posts[i];
       console.log(`\n📤 投稿 ${i + 1}/${posts.length}: "${title}"`);
       console.log(`   投稿文: ${postText}`);
 
       await postToThreads(page, postText);
       console.log(`   ✅ 投稿完了`);
+
+      // 投稿できた時点ですぐ記録する（後続でコケても再投稿しないように）
+      state.posted.unshift({ url: normalizeUrl(url), title, postedAt: new Date().toISOString() });
+      state.lastCheck = new Date().toISOString();
+      saveState(state);
+      console.log(`   💾 posted.json に記録しました`);
 
       // 投稿後はホームへ遷移してコンポーザーの状態をリセット
       if (i < posts.length - 1) {
@@ -343,9 +386,7 @@ async function postToThreads(page, text) {
       }
     }
 
-    // 5. last_check.json を更新（全投稿成功後）
-    saveLastCheck(new Date());
-    console.log(`\n✅ 全 ${posts.length} 件の投稿が完了しました。last_check.json を更新しました。`);
+    console.log(`\n✅ 全 ${posts.length} 件の投稿が完了しました。`);
 
   } catch (err) {
     console.error('❌ エラー:', err.message);

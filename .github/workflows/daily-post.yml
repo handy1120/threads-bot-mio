@@ -9,6 +9,11 @@ on:
 jobs:
   post:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # posted.json をコミットして状態を永続化するため
+    concurrency:
+      group: daily-post
+      cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -28,17 +33,6 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      # 実行間で last_check.json を引き継ぎ、同じ記事の再投稿を防ぐ。
-      # key に run_id を含めるため毎回ミスヒット→post-job で必ず新しいcacheを保存し、
-      # restore-keys で直近のcacheを復元する（standard "always update" パターン）。
-      - name: Restore last_check state
-        uses: actions/cache@v4
-        with:
-          path: last_check.json
-          key: last-check-${{ github.run_id }}
-          restore-keys: |
-            last-check-
-
       - name: Run post script
         env:
           THREADS_SESSION_ID: ${{ secrets.THREADS_SESSION_ID }}
@@ -48,6 +42,25 @@ jobs:
           NOTIFY_EMAIL_PASS: ${{ secrets.NOTIFY_EMAIL_PASS }}
         run: node post.js
 
+      # 投稿済み記事の履歴をリポジトリに書き戻して永続化する。
+      # （Actions cache は失敗時に保存されず・7日で消えるため、同じ記事を
+      #   毎日投稿する原因になっていた）
+      # 投稿に成功した直後に posted.json が更新されるので、後続が失敗しても
+      # 記録が残るよう if: always() で実行する。
+      - name: Persist posted.json
+        if: always()
+        run: |
+          if [ -z "$(git status --porcelain posted.json)" ]; then
+            echo "posted.json に変更なし"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add posted.json
+          git commit -m "chore: posted.json を更新 [skip ci]"
+          git pull --rebase --autostash
+          git push
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -55,6 +68,6 @@ jobs:
           name: logs
           path: |
             log.txt
-            last_check.json
+            posted.json
             debug_*.png
           retention-days: 30

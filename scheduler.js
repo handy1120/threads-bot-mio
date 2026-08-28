@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 const fs     = require('fs');
 const path   = require('path');
 
-const LAST_CHECK_FILE = path.join(__dirname, 'last_check.json');
+const STATE_FILE      = path.join(__dirname, 'posted.json');
 const LOG_FILE        = path.join(__dirname, 'log.txt');
 const POST_SCRIPT     = path.join(__dirname, 'post.js');
 const CATCH_UP_HOURS  = 24; // 何時間以上経過したら即実行するか
@@ -20,7 +20,7 @@ function log(msg) {
 // ── 前回チェック時刻を読み込む ──────────────────────────
 function loadLastCheck() {
   try {
-    const data = JSON.parse(fs.readFileSync(LAST_CHECK_FILE, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     return new Date(data.lastCheck);
   } catch {
     return new Date(0); // ファイルなし → 未実行扱い
